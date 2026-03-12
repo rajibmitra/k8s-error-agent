@@ -5,15 +5,24 @@ An AI-powered Kubernetes SRE agent that automatically detects error pods, summar
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│  Kubernetes  │────▶│  AI Agent    │────▶│    Jira     │
-│  Cluster     │     │  (Claude)    │     │   Cloud     │
-└─────────────┘     └──────────────┘     └─────────────┘
-      │                    │
-      ▼                    ▼
-  Error Pods         Summarization
-  Log Tailing        Severity Rating
-  Event Collection   Root Cause Analysis
+                        ┌─────────────────┐
+                        │  Context Hub    │
+                        │  (chub CLI)     │
+                        │  jira/issues    │
+                        └────────┬────────┘
+                                 │ prompt enrichment
+                                 ▼
+┌──────────────┐     ┌──────────────────────┐     ┌─────────────┐
+│  Kubernetes  │────▶│      AI Agent        │────▶│    Jira     │
+│  Cluster     │     │      (Claude)        │     │   Cloud     │
+└──────────────┘     └──────────────────────┘     └─────────────┘
+       │                        │
+       ▼                        ▼
+  Error Pods              Summarization
+  Log Tailing             Severity Rating
+  Event Collection        Root Cause Analysis
+  (CrashLoopBackOff       Deduplication
+   OOMKilled, Error)      Jira Ticket Creation
 ```
 
 ## Features
