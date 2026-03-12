@@ -14,10 +14,11 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.models.schemas import LogSummary, PodErrorInfo
+from src.utils.context_hub import jira_context
 
 logger = structlog.get_logger()
 
-SYSTEM_PROMPT = """You are a Kubernetes SRE expert. Analyze error logs and events from a pod
+_BASE_SYSTEM_PROMPT = """You are a Kubernetes SRE expert. Analyze error logs and events from a pod
 and produce a structured JSON summary.
 
 You must respond with ONLY valid JSON (no markdown, no backticks, no preamble).
@@ -36,7 +37,25 @@ Severity guidelines:
 - critical: Data loss, security breach, complete service outage
 - high: Partial outage, persistent crashes, resource exhaustion (OOMKilled)
 - medium: Intermittent failures, degraded performance, config errors
-- low: Transient issues, expected restarts, non-impacting warnings"""
+- low: Transient issues, expected restarts, non-impacting warnings
+
+Jira formatting guidance for summary, root_cause, and suggested_fix fields:
+- Use plain text — these values are embedded in Jira wiki markup descriptions
+- Do NOT use markdown (no **, no `, no #) — Jira uses its own markup syntax
+- For code or commands, keep them as plain text; the reporter wraps them in {{code}} blocks
+- Keep suggested_fix actionable and specific (include kubectl commands where relevant)"""
+
+
+def _build_system_prompt() -> str:
+    """Build the system prompt, enriched with Jira API context from context-hub if available."""
+    ctx = jira_context()
+    if not ctx:
+        return _BASE_SYSTEM_PROMPT
+    return (
+        _BASE_SYSTEM_PROMPT
+        + "\n\n--- Jira API Reference (from context-hub) ---\n"
+        + ctx
+    )
 
 
 class LogAnalyzer:
@@ -48,6 +67,8 @@ class LogAnalyzer:
         self.model = llm_cfg.get("model", "claude-sonnet-4-20250514")
         self.max_tokens = llm_cfg.get("max_tokens", 1024)
         self.temperature = llm_cfg.get("temperature", 0.0)
+        # Fetch context-hub docs once at startup; cached for the process lifetime
+        self._system_prompt = _build_system_prompt()
 
     @retry(
         stop=stop_after_attempt(3),
@@ -68,7 +89,7 @@ class LogAnalyzer:
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            system=SYSTEM_PROMPT,
+            system=self._system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
 

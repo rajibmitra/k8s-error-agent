@@ -109,6 +109,7 @@ k8s-error-agent/
 │   │   └── schemas.py        # Pydantic models for structured data
 │   └── utils/
 │       ├── config.py         # Configuration loader
+│       ├── context_hub.py    # context-hub chub CLI wrapper for prompt enrichment
 │       └── dedup.py          # Error deduplication via content hashing
 ├── config/
 │   └── config.example.yaml   # Example configuration
@@ -264,6 +265,47 @@ kubectl delete pods -l test=k8s-error-agent --grace-period=0
 ## RBAC
 
 The agent needs read access to pods, logs, and events. See `deploy/rbac.yaml` for the minimal ClusterRole.
+
+## Context Hub Integration
+
+The agent integrates with [context-hub](https://github.com/andrewyng/context-hub) to enrich Claude's system prompt with accurate, up-to-date Jira API documentation at startup. This ensures the `summary`, `root_cause`, and `suggested_fix` fields Claude generates are formatted correctly for Jira wiki markup rendering.
+
+### How it works
+
+At `LogAnalyzer` startup, `src/utils/context_hub.py` runs `chub get jira/issues --lang py` and extracts the **Issues** and **Error Handling** sections (covering `create_issue` field names, priority/label handling, and `JIRAError` patterns). These are appended to the system prompt once and cached for the process lifetime — no per-request overhead.
+
+If `chub` is not installed the agent falls back to the base prompt silently — the integration is fully optional.
+
+### Setup
+
+```bash
+# Install the chub CLI (requires Node.js 18+)
+npm install -g @aisuite/chub
+
+# Refresh the registry (run once, or to update)
+chub update
+```
+
+### What gets injected
+
+From the `jira/issues` doc:
+- `### Issues` — `create_issue`, `create_issues` (bulk), `update`, field dict structure, priority/label/component fields
+- `## Error Handling` — `JIRAError` status codes (401, 403, 404) and exception patterns
+
+### Verify the integration
+
+```bash
+python3 -c "
+from src.utils.context_hub import jira_context
+ctx = jira_context()
+print(f'Injected {len(ctx.splitlines())} lines ({len(ctx)} chars) into system prompt')
+"
+```
+
+Expected output:
+```
+Injected 185 lines (4371 chars) into system prompt
+```
 
 ## Extending
 
