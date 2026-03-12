@@ -1,0 +1,156 @@
+"""Jira ticket reporter.
+
+Creates structured Jira tickets from analyzed Kubernetes error summaries.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import structlog
+from jira import JIRA
+from jira.exceptions import JIRAError
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from src.models.schemas import JiraTicketResult, LogSummary, PodErrorInfo, Severity
+
+logger = structlog.get_logger()
+
+
+class JiraReporter:
+    """Creates Jira tickets from error analysis results."""
+
+    def __init__(self, config: dict[str, Any]):
+        jira_cfg = config["jira"]
+        self.jira = JIRA(
+            server=jira_cfg["server"],
+            basic_auth=(jira_cfg["email"], jira_cfg["api_token"]),
+        )
+        self.project = jira_cfg.get("project", "SRE")
+        self.issue_type = jira_cfg.get("issue_type", "Bug")
+        self.labels = jira_cfg.get("labels", ["ai-agent", "k8s-error"])
+        self.severity_to_priority = jira_cfg.get(
+            "severity_to_priority",
+            {
+                "critical": "Highest",
+                "high": "High",
+                "medium": "Medium",
+                "low": "Low",
+            },
+        )
+        logger.info("Jira reporter initialized", project=self.project)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+    )
+    def create_ticket(
+        self,
+        pod_info: PodErrorInfo,
+        summary: LogSummary,
+        dedup_hash: str,
+    ) -> JiraTicketResult:
+        """Create a Jira ticket for an analyzed error."""
+        title = self._build_title(pod_info, summary)
+        description = self._build_description(pod_info, summary, dedup_hash)
+        priority = self.severity_to_priority.get(summary.severity.value, "Medium")
+
+        logger.info(
+            "Creating Jira ticket",
+            project=self.project,
+            severity=summary.severity.value,
+            priority=priority,
+            pod=pod_info.pod_name,
+        )
+
+        try:
+            issue = self.jira.create_issue(
+                project=self.project,
+                summary=title,
+                description=description,
+                issuetype={"name": self.issue_type},
+                priority={"name": priority},
+                labels=self.labels,
+            )
+
+            result = JiraTicketResult(
+                ticket_key=issue.key,
+                ticket_url=f"{self.jira.server_url}/browse/{issue.key}",
+                summary=title,
+                severity=summary.severity,
+            )
+
+            logger.info(
+                "Jira ticket created",
+                ticket=result.ticket_key,
+                url=result.ticket_url,
+            )
+            return result
+
+        except JIRAError as e:
+            logger.error(
+                "Failed to create Jira ticket",
+                error=str(e),
+                status_code=getattr(e, "status_code", None),
+            )
+            raise
+
+    def _build_title(self, pod_info: PodErrorInfo, summary: LogSummary) -> str:
+        """Build a concise Jira ticket title."""
+        severity_tag = summary.severity.value.upper()
+        # Truncate summary to keep title readable
+        short_summary = summary.summary.split(".")[0][:80]
+        owner = f"{pod_info.owner_kind}/{pod_info.owner_name}" if pod_info.owner_name else pod_info.pod_name
+        return f"[{severity_tag}] {owner} - {short_summary}"
+
+    def _build_description(
+        self,
+        pod_info: PodErrorInfo,
+        summary: LogSummary,
+        dedup_hash: str,
+    ) -> str:
+        """Build a structured Jira ticket description using Jira wiki markup."""
+        return f"""h2. AI-Generated Error Summary
+
+||Field||Value||
+|Severity|{summary.severity.value.upper()}|
+|Error State|{pod_info.error_state}|
+|Category|{summary.error_category}|
+|Pod|{pod_info.pod_name}|
+|Namespace|{pod_info.namespace}|
+|Container|{pod_info.container_name}|
+|Node|{pod_info.node_name or 'N/A'}|
+|Owner|{pod_info.owner_kind or 'N/A'}/{pod_info.owner_name or 'N/A'}|
+|Restart Count|{pod_info.restart_count}|
+|Dedup Hash|{{monospace}}{dedup_hash}{{monospace}}|
+
+h3. Summary
+{summary.summary}
+
+h3. Root Cause Analysis
+{summary.root_cause}
+
+h3. Suggested Fix
+{summary.suggested_fix}
+
+{f'h3. Affected Service: {summary.affected_service}' if summary.affected_service else ''}
+
+h3. Quick Commands
+{{code:bash}}
+# View current pod status
+kubectl get pod {pod_info.pod_name} -n {pod_info.namespace} -o wide
+
+# View logs
+kubectl logs {pod_info.pod_name} -n {pod_info.namespace} -c {pod_info.container_name} --tail=200
+
+# View events
+kubectl get events -n {pod_info.namespace} --field-selector involvedObject.name={pod_info.pod_name}
+
+# Describe pod
+kubectl describe pod {pod_info.pod_name} -n {pod_info.namespace}
+{{code}}
+
+----
+_This ticket was auto-generated by the K8s Error Log AI Agent._
+_Dedup hash: {dedup_hash} | Collected at: {pod_info.collected_at.isoformat()}_
+"""

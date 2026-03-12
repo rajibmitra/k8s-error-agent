@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-error-agent
+  namespace: default
+  labels:
+    app: k8s-error-agent
+spec:
+  replicas: 1  # Single replica — dedup is not distributed
+  strategy:
+    type: Recreate  # Avoid running two agents simultaneously
+  selector:
+    matchLabels:
+      app: k8s-error-agent
+  template:
+    metadata:
+      labels:
+        app: k8s-error-agent
+    spec:
+      serviceAccountName: k8s-error-agent
+      containers:
+        - name: agent
+          image: your-registry/k8s-error-agent:latest
+          # No --once flag = continuous polling mode
+          envFrom:
+            - secretRef:
+                name: k8s-error-agent
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "print('ok')"]
+            initialDelaySeconds: 10
+            periodSeconds: 60
+      volumes:
+        - name: config
+          configMap:
+            name: k8s-error-agent-config

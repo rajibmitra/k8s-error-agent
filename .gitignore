@@ -137,6 +137,9 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+
+# Local config with real credentials — only config.example.yaml is committed
+config/config.yaml
 .venv
 env/
 venv/

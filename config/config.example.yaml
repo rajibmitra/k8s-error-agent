@@ -1,0 +1,77 @@
+# K8s Error Log AI Agent Configuration
+# Copy to config/config.yaml and update values
+
+# Kubernetes settings
+kubernetes:
+  # Use in-cluster config when running inside K8s (auto-detected)
+  # Set kubeconfig path for local development
+  kubeconfig: null  # e.g., "~/.kube/config"
+  context: null     # e.g., "my-cluster-context"
+
+# Namespaces to monitor
+namespaces:
+  - default
+  - production
+  - staging
+
+# Polling configuration
+poll_interval_seconds: 300  # 5 minutes
+
+# Log collection settings
+log_collection:
+  tail_lines: 100          # Number of log lines to fetch per pod
+  max_log_chars: 4000      # Truncate logs before sending to LLM
+  max_events: 20           # Max events to include per pod
+  error_states:            # Pod states considered as errors
+    - CrashLoopBackOff
+    - Error
+    - OOMKilled
+    - ImagePullBackOff
+    - CreateContainerConfigError
+
+# LLM settings
+llm:
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 1024
+  temperature: 0.0  # Deterministic for consistency
+
+# Jira settings
+jira:
+  server: "https://yourcompany.atlassian.net"
+  email: "your-email@company.com"
+  # API token is read from JIRA_API_TOKEN env var
+  project: "SRE"
+  issue_type: "Bug"
+  # Labels to add to all created tickets
+  labels:
+    - "ai-agent"
+    - "k8s-error"
+    - "auto-created"
+  # Map agent severity to Jira priority
+  severity_to_priority:
+    critical: "Highest"
+    high: "High"
+    medium: "Medium"
+    low: "Low"
+
+# Deduplication
+dedup:
+  # How to track seen errors: "memory" (in-process) or "configmap" (persistent)
+  backend: "memory"
+  # ConfigMap name if using configmap backend
+  configmap_name: "k8s-error-agent-state"
+  configmap_namespace: "default"
+  # TTL for seen errors (seconds). After this, the same error can create a new ticket.
+  ttl_seconds: 86400  # 24 hours
+
+# Severity threshold - only create tickets for this severity and above
+# Options: low, medium, high, critical
+severity_threshold: "low"
+
+# Dry-run mode (log actions without creating Jira tickets)
+dry_run: false
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "json"  # "json" or "console"

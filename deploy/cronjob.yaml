@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: k8s-error-agent
+  namespace: default
+spec:
+  schedule: "*/5 * * * *"  # Every 5 minutes
+  concurrencyPolicy: Forbid  # Don't run if previous scan is still going
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 240  # Kill if running > 4 minutes
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: k8s-error-agent
+          restartPolicy: Never
+          containers:
+            - name: agent
+              image: your-registry/k8s-error-agent:latest
+              args: ["--once"]  # Single scan per CronJob run
+              envFrom:
+                - secretRef:
+                    name: k8s-error-agent
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              volumeMounts:
+                - name: config
+                  mountPath: /app/config
+                  readOnly: true
+          volumes:
+            - name: config
+              configMap:
+                name: k8s-error-agent-config
